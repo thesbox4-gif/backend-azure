@@ -254,12 +254,14 @@ export async function getOrders(req: AuthRequest, res: Response) {
   if (status) { where.push('o.status = @status'); params.status = status }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
 
-  const rows = await query(
-    `SELECT ${orderJsonCols} FROM dbo.orders o ${whereSql}
+  const [rows, countRow] = await Promise.all([
+    query(
+      `SELECT ${orderJsonCols} FROM dbo.orders o ${whereSql}
      ORDER BY o.created_at DESC OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY`,
-    params
-  )
-  const countRow = await queryOne<{ total: number }>(`SELECT COUNT(*) AS total FROM dbo.orders o ${whereSql}`, params)
+      params
+    ),
+    queryOne<{ total: number }>(`SELECT COUNT(*) AS total FROM dbo.orders o ${whereSql}`, params),
+  ])
   const count = countRow?.total ?? 0
 
   res.json({

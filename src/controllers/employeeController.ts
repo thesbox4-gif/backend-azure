@@ -11,17 +11,19 @@ export async function getEmployees(req: AuthRequest, res: Response) {
   let where = "WHERE role = 'employee'"
   if (status) { where += ' AND employee_status = @status'; params.status = status }
 
-  const data = await query(
-    `SELECT id, name, phone, employee_status, email, active, created_at, updated_at
+  const [data, countRow] = await Promise.all([
+    query(
+      `SELECT id, name, phone, employee_status, email, active, created_at, updated_at
      FROM dbo.profiles ${where}
      ORDER BY created_at DESC
      OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY`,
-    params
-  )
-  const countRow = await queryOne<{ total: number }>(
-    `SELECT COUNT(*) AS total FROM dbo.profiles ${where}`,
-    params
-  )
+      params
+    ),
+    queryOne<{ total: number }>(
+      `SELECT COUNT(*) AS total FROM dbo.profiles ${where}`,
+      params
+    ),
+  ])
 
   res.json({ data, count: countRow?.total ?? 0, page: +page, limit: +limit })
 }

@@ -22,8 +22,9 @@ export async function listUsers(req: AuthRequest, res: Response) {
   if (search) { where += ' AND p.name LIKE @search'; params.search = `%${search}%` }
 
   // order stats aggregated per user in a correlated subquery
-  const rows = await query(
-    `SELECT p.id, p.name, p.phone, p.role, p.employee_status, p.email, p.active, p.created_at,
+  const [rows, countRow] = await Promise.all([
+    query(
+      `SELECT p.id, p.name, p.phone, p.role, p.employee_status, p.email, p.active, p.created_at,
             ISNULL(s.orderCount, 0) AS orderCount, ISNULL(s.totalSpent, 0) AS totalSpent
      FROM dbo.profiles p
      OUTER APPLY (
@@ -33,12 +34,13 @@ export async function listUsers(req: AuthRequest, res: Response) {
      ${where}
      ORDER BY p.created_at DESC
      OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY`,
-    params
-  )
-  const countRow = await queryOne<{ total: number }>(
-    `SELECT COUNT(*) AS total FROM dbo.profiles p ${where}`,
-    params
-  )
+      params
+    ),
+    queryOne<{ total: number }>(
+      `SELECT COUNT(*) AS total FROM dbo.profiles p ${where}`,
+      params
+    ),
+  ])
 
   res.json({ data: rows, count: countRow?.total ?? 0, page: +page, limit: +limit })
 }

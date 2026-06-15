@@ -75,16 +75,18 @@ export async function getAllProducts(req: Request, res: Response) {
   params.offset = offset
   params.limit = +limit
 
-  const rows = await query(
-    `SELECT ${productJsonCols}
+  const [rows, countRow] = await Promise.all([
+    query(
+      `SELECT ${productJsonCols}
      FROM dbo.products p ${whereSql} ${orderSql}
      OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY`,
-    params
-  )
-  const countRow = await queryOne<{ total: number }>(
-    `SELECT COUNT(*) AS total FROM dbo.products p ${whereSql}`,
-    params
-  )
+      params
+    ),
+    queryOne<{ total: number }>(
+      `SELECT COUNT(*) AS total FROM dbo.products p ${whereSql}`,
+      params
+    ),
+  ])
   const count = countRow?.total ?? 0
 
   res.json({

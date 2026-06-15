@@ -23,7 +23,7 @@ router.post(
     const { productType, color, category, imageUrl } = req.body
 
     try {
-      await consumeQuota('content', req.user?.id)
+      // await consumeQuota('content', req.user?.id)
       let buffer: Buffer
       let mimeType: string
 
@@ -82,7 +82,7 @@ router.post(
     const timing = { prepareMs: 0, geminiMs: 0, uploadMs: 0, totalMs: 0 }
 
     try {
-      await consumeQuota('image', req.user?.id)
+      // await consumeQuota('image', req.user?.id)
       if (imageUrls.length > 0) {
         const prepStart = Date.now()
         const urls = imageUrls.slice(0, 7)

@@ -69,12 +69,14 @@ export async function getOfflineSales(req: AuthRequest, res: Response) {
     JSON_QUERY((SELECT v.id, v.color, v.size, v.sku FROM dbo.variants v WHERE v.id = os.variant_id FOR JSON PATH, INCLUDE_NULL_VALUES, WITHOUT_ARRAY_WRAPPER)) AS variant,
     JSON_QUERY((SELECT pr.id, pr.name FROM dbo.profiles pr WHERE pr.id = os.sold_by FOR JSON PATH, INCLUDE_NULL_VALUES, WITHOUT_ARRAY_WRAPPER)) AS seller`
 
-  const rows = await query(
-    `SELECT ${cols} FROM dbo.offline_sales os ${whereSql}
+  const [rows, countRow] = await Promise.all([
+    query(
+      `SELECT ${cols} FROM dbo.offline_sales os ${whereSql}
      ORDER BY os.created_at DESC OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY`,
-    params
-  )
-  const countRow = await queryOne<{ total: number }>(`SELECT COUNT(*) AS total FROM dbo.offline_sales os ${whereSql}`, params)
+      params
+    ),
+    queryOne<{ total: number }>(`SELECT COUNT(*) AS total FROM dbo.offline_sales os ${whereSql}`, params),
+  ])
 
   const data = rows.map((r) => ({
     ...r,
