@@ -6,7 +6,8 @@ import { aiLimiter } from '../middleware/rateLimiter'
 import { uploadImage } from '../services/storageService'
 import { generateProductImage, generateProductContent } from '../services/geminiService'
 import { optimizeSourceImage } from '../services/imagePrep'
-import { consumeQuota, QuotaExceededError } from '../services/aiQuotaService'
+// AI quota disabled until multi-tenant quota feature is live
+// import { consumeQuota, QuotaExceededError } from '../services/aiQuotaService'
 
 const router = Router()
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } })
@@ -48,9 +49,6 @@ router.post(
       })
       res.json(content)
     } catch (err) {
-      if (err instanceof QuotaExceededError) {
-        return res.status(429).json({ error: err.message })
-      }
       res.status(502).json({ error: err instanceof Error ? err.message : 'Content generation failed' })
     }
   }
@@ -161,9 +159,6 @@ router.post(
 
       res.json({ url, timing, productType: productType || 'saree' })
     } catch (err) {
-      if (err instanceof QuotaExceededError) {
-        return res.status(429).json({ error: err.message })
-      }
       res.status(502).json({ error: err instanceof Error ? err.message : 'Image generation failed' })
     }
   }

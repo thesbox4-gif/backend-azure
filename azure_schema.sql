@@ -57,13 +57,19 @@ CREATE TABLE dbo.products (
   title         nvarchar(max) NOT NULL,
   description   nvarchar(max),
   type          nvarchar(20) NOT NULL
-                  CONSTRAINT ck_products_type CHECK (type IN ('saree','jewellery')),
+                  CONSTRAINT ck_products_type CHECK (type IN (
+                    'saree','jewellery',
+                    'mens_kurta','sherwani','bundi',
+                    'mens_shirt','mens_tshirt','mens_formal','mens_trouser'
+                  )),
   category_id   uniqueidentifier NULL REFERENCES dbo.categories(id),
   base_price    decimal(10,2) NOT NULL CONSTRAINT ck_products_base_price CHECK (base_price > 0),
   discount_pct  decimal(5,2) DEFAULT 0 CONSTRAINT ck_products_discount CHECK (discount_pct >= 0 AND discount_pct <= 100),
   coupon_code   nvarchar(255),
   coupon_disc   decimal(5,2),
   published     bit DEFAULT 0,
+  barcode       nvarchar(255),
+  block         bit NOT NULL CONSTRAINT df_products_block DEFAULT 0,
   created_by    uniqueidentifier NULL REFERENCES dbo.profiles(id),
   created_at    datetimeoffset DEFAULT sysdatetimeoffset(),
   updated_at    datetimeoffset DEFAULT sysdatetimeoffset()
@@ -243,6 +249,7 @@ CREATE TABLE dbo.offline_sales (
   sold_by        uniqueidentifier NULL REFERENCES dbo.profiles(id),
   quantity       int NOT NULL CONSTRAINT ck_offline_qty CHECK (quantity > 0),
   unit_price     decimal(10,2) NOT NULL,
+  amount         decimal(10,2),
   customer_name  nvarchar(max),
   customer_phone nvarchar(64),
   created_at     datetimeoffset DEFAULT sysdatetimeoffset()
@@ -294,4 +301,15 @@ CREATE TABLE dbo.ai_usage_log (
 GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='idx_ai_usage_log_type' AND object_id=OBJECT_ID('dbo.ai_usage_log'))
   CREATE INDEX idx_ai_usage_log_type ON dbo.ai_usage_log(usage_type);
+GO
+
+-- ── migrations (idempotent column adds) ─────────────────────
+IF COL_LENGTH('dbo.products', 'barcode') IS NULL
+  ALTER TABLE dbo.products ADD barcode nvarchar(255) NULL;
+GO
+IF COL_LENGTH('dbo.products', 'block') IS NULL
+  ALTER TABLE dbo.products ADD block bit NOT NULL CONSTRAINT df_products_block DEFAULT 0;
+GO
+IF COL_LENGTH('dbo.offline_sales', 'amount') IS NULL
+  ALTER TABLE dbo.offline_sales ADD amount decimal(10,2) NULL;
 GO

@@ -3,10 +3,15 @@ import { randomUUID } from 'crypto'
 import { Expo } from 'expo-server-sdk'
 import { query, queryOne, uuidParam } from '../db'
 import { logger } from '../logger'
+import { initFirebase, sendFcmNotification } from './firebaseService'
 import { notificationQueue } from './queueService'
 
-const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
-const expo = new Expo({ useFcmV1: false })
+const twilioSid = process.env.TWILIO_ACCOUNT_SID
+const twilioToken = process.env.TWILIO_AUTH_TOKEN
+const twilioClient = twilioSid && twilioToken ? twilio(twilioSid, twilioToken) : null
+const expo = new Expo({ useFcmV1: true })
+
+initFirebase()
 
 async function sendExpoNotification(
   token: string,
@@ -23,6 +28,19 @@ async function sendExpoNotification(
   }
 }
 
+async function sendPushNotification(
+  token: string,
+  title: string,
+  body: string,
+  data?: Record<string, string>
+): Promise<void> {
+  if (Expo.isExpoPushToken(token)) {
+    await sendExpoNotification(token, title, body, data)
+    return
+  }
+  await sendFcmNotification(token, title, body, data)
+}
+
 async function saveInAppNotification(userId: string, title: string, body: string): Promise<void> {
   await query(
     `INSERT INTO dbo.notifications (id, user_id, title, body, [read], created_at)
@@ -37,21 +55,23 @@ export function notifyAdminOrderPlaced(order: {
   order_items?: unknown[]
 }): void {
   notificationQueue.enqueue(async () => {
-    try {
-      await twilioClient.messages.create({
-        from: process.env.TWILIO_WHATSAPP_FROM!,
-        to: process.env.ADMIN_WHATSAPP_TO!,
-        body: `🛍️ New Order!\nID: #${order.id.slice(0, 8)}\nAmount: ₹${order.total_amount}\nItems: ${order.order_items?.length ?? 0}`,
-      })
-    } catch (err) {
-      logger.error({ err }, 'WhatsApp notification failed')
+    if (twilioClient && process.env.TWILIO_WHATSAPP_FROM && process.env.ADMIN_WHATSAPP_TO) {
+      try {
+        await twilioClient.messages.create({
+          from: process.env.TWILIO_WHATSAPP_FROM,
+          to: process.env.ADMIN_WHATSAPP_TO,
+          body: `New Order!\nID: #${order.id.slice(0, 8)}\nAmount: ₹${order.total_amount}\nItems: ${order.order_items?.length ?? 0}`,
+        })
+      } catch (err) {
+        logger.error({ err }, 'WhatsApp notification failed')
+      }
     }
 
     const admin = await queryOne<{ fcm_token: string | null }>(
       "SELECT TOP 1 fcm_token FROM dbo.profiles WHERE role = 'admin' AND fcm_token IS NOT NULL"
     )
     if (admin?.fcm_token) {
-      await sendExpoNotification(
+      await sendPushNotification(
         admin.fcm_token,
         '🛍️ New Order!',
         `Order #${order.id.slice(0, 8)} — ₹${order.total_amount}`,
@@ -73,7 +93,7 @@ export function notifyCustomerStatusUpdate(userId: string, orderId: string, stat
       { id: uuidParam(userId) }
     )
     if (profile?.fcm_token) {
-      await sendExpoNotification(profile.fcm_token, title, body, { orderId, screen: 'OrderTracking' })
+      await sendPushNotification(profile.fcm_token, title, body, { orderId, screen: 'OrderTracking' })
     }
   })
 }
@@ -92,7 +112,7 @@ export function notifyEmployeeApproval(userId: string, approved: boolean): void 
       { id: uuidParam(userId) }
     )
     if (profile?.fcm_token) {
-      await sendExpoNotification(profile.fcm_token, title, body)
+      await sendPushNotification(profile.fcm_token, title, body)
     }
   })
 }

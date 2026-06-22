@@ -50,10 +50,11 @@ BEGIN
 END
 GO
 
--- ── maybe_reset_ai_quota_period() ──────────────────────────
+-- ── maybe_reset_ai_quota_period(client_id) ─────────────────
 IF OBJECT_ID('dbo.maybe_reset_ai_quota_period', 'P') IS NOT NULL DROP PROCEDURE dbo.maybe_reset_ai_quota_period
 GO
 CREATE PROCEDURE dbo.maybe_reset_ai_quota_period
+  @p_client_id int = 1
 AS
 BEGIN
   SET NOCOUNT ON
@@ -62,20 +63,21 @@ BEGIN
       content_used = 0,
       period_start = DATEFROMPARTS(YEAR(SYSDATETIMEOFFSET()), MONTH(SYSDATETIMEOFFSET()), 1),
       updated_at = SYSDATETIMEOFFSET()
-  WHERE id = 1
+  WHERE client_id = @p_client_id
     AND reset_period = 'monthly'
     AND (YEAR(period_start) < YEAR(SYSDATETIMEOFFSET())
          OR (YEAR(period_start) = YEAR(SYSDATETIMEOFFSET()) AND MONTH(period_start) < MONTH(SYSDATETIMEOFFSET())))
 END
 GO
 
--- ── consume_ai_quota(type, user_id) ────────────────────────
+-- ── consume_ai_quota(type, client_id, user_id) ───────────────
 -- Atomically consumes one unit. Returns remaining count via SELECT, or raises
 -- an error (THROW) the app maps to a QuotaExceededError.
 IF OBJECT_ID('dbo.consume_ai_quota', 'P') IS NOT NULL DROP PROCEDURE dbo.consume_ai_quota
 GO
 CREATE PROCEDURE dbo.consume_ai_quota
   @p_type nvarchar(20),
+  @p_client_id int,
   @p_user_id uniqueidentifier = NULL
 AS
 BEGIN
@@ -85,7 +87,7 @@ BEGIN
     ;THROW 50001, 'Invalid usage type', 1
   END
 
-  EXEC dbo.maybe_reset_ai_quota_period
+  EXEC dbo.maybe_reset_ai_quota_period @p_client_id = @p_client_id
 
   BEGIN TRANSACTION
   DECLARE @images_used int, @image_limit int, @content_used int, @content_limit int, @remaining int
@@ -93,7 +95,7 @@ BEGIN
   SELECT @images_used = images_used, @image_limit = image_limit,
          @content_used = content_used, @content_limit = content_limit
   FROM dbo.ai_quota_settings WITH (UPDLOCK, ROWLOCK)
-  WHERE id = 1
+  WHERE client_id = @p_client_id
 
   IF @@ROWCOUNT = 0
   BEGIN
@@ -108,7 +110,7 @@ BEGIN
       ROLLBACK TRANSACTION;
       THROW 50003, 'AI image quota exhausted', 1
     END
-    UPDATE dbo.ai_quota_settings SET images_used = images_used + 1, updated_at = SYSDATETIMEOFFSET() WHERE id = 1
+    UPDATE dbo.ai_quota_settings SET images_used = images_used + 1, updated_at = SYSDATETIMEOFFSET() WHERE client_id = @p_client_id
     SET @remaining = @image_limit - @images_used - 1
   END
   ELSE
@@ -118,21 +120,22 @@ BEGIN
       ROLLBACK TRANSACTION;
       THROW 50004, 'AI content quota exhausted', 1
     END
-    UPDATE dbo.ai_quota_settings SET content_used = content_used + 1, updated_at = SYSDATETIMEOFFSET() WHERE id = 1
+    UPDATE dbo.ai_quota_settings SET content_used = content_used + 1, updated_at = SYSDATETIMEOFFSET() WHERE client_id = @p_client_id
     SET @remaining = @content_limit - @content_used - 1
   END
 
-  INSERT INTO dbo.ai_usage_log (id, usage_type, user_id) VALUES (NEWID(), @p_type, @p_user_id)
+  INSERT INTO dbo.ai_usage_log (id, usage_type, user_id, client_id) VALUES (NEWID(), @p_type, @p_user_id, @p_client_id)
   COMMIT TRANSACTION
 
   SELECT @p_type AS [type], @remaining AS remaining
 END
 GO
 
--- ── reset_ai_quota_period() (manual) ───────────────────────
+-- ── reset_ai_quota_period(client_id) (manual) ──────────────
 IF OBJECT_ID('dbo.reset_ai_quota_period', 'P') IS NOT NULL DROP PROCEDURE dbo.reset_ai_quota_period
 GO
 CREATE PROCEDURE dbo.reset_ai_quota_period
+  @p_client_id int = 1
 AS
 BEGIN
   SET NOCOUNT ON
@@ -143,6 +146,6 @@ BEGIN
                           THEN DATEFROMPARTS(YEAR(SYSDATETIMEOFFSET()), MONTH(SYSDATETIMEOFFSET()), 1)
                           ELSE period_start END,
       updated_at = SYSDATETIMEOFFSET()
-  WHERE id = 1
+  WHERE client_id = @p_client_id
 END
 GO

@@ -32,16 +32,22 @@ export interface QuotaStats {
   updatedAt: string | null
 }
 
+function getClientId(): number {
+  const id = parseInt(process.env.CLIENT_ID ?? '1', 10)
+  return Number.isFinite(id) && id > 0 ? id : 1
+}
+
 async function ensurePeriodFresh(): Promise<void> {
   const pool = await getPool()
-  await pool.request().execute('dbo.maybe_reset_ai_quota_period')
+  await pool.request().input('p_client_id', sql.Int, getClientId()).execute('dbo.maybe_reset_ai_quota_period')
 }
 
 async function fetchSettingsRow(): Promise<QuotaRow> {
   await ensurePeriodFresh()
   const data = await queryOne<QuotaRow>(
     `SELECT image_limit, content_limit, reset_period, period_start, images_used, content_used, updated_at
-     FROM dbo.ai_quota_settings WHERE id = 1`
+     FROM dbo.ai_quota_settings WHERE client_id = @client_id`,
+    { client_id: getClientId() }
   )
   if (!data) throw new Error('AI quota settings not configured')
   return data
@@ -64,7 +70,9 @@ export async function getQuotaStats(): Promise<QuotaStats> {
 export async function consumeQuota(type: AiUsageType, userId?: string): Promise<void> {
   const pool = await getPool()
   try {
-    const req = pool.request().input('p_type', type)
+    const req = pool.request()
+      .input('p_type', type)
+      .input('p_client_id', sql.Int, getClientId())
     if (userId) req.input('p_user_id', sql.UniqueIdentifier, userId)
     await req.execute('dbo.consume_ai_quota')
   } catch (err) {
@@ -85,7 +93,10 @@ export async function updateLimits(input: UpdateLimitsInput, updatedBy: string):
   const profile = await queryOne<{ id: string }>('SELECT id FROM dbo.profiles WHERE id = @id', { id: uuidParam(updatedBy) })
 
   const sets: string[] = ['updated_at = SYSDATETIMEOFFSET()', 'updated_by = @updated_by']
-  const params: Record<string, unknown> = { updated_by: uuidParam(profile?.id ?? null) }
+  const params: Record<string, unknown> = {
+    updated_by: uuidParam(profile?.id ?? null),
+    client_id: getClientId(),
+  }
 
   if (input.imageLimit !== undefined) {
     if (!Number.isInteger(input.imageLimit) || input.imageLimit < 0) throw new Error('imageLimit must be a non-negative integer')
@@ -104,12 +115,12 @@ export async function updateLimits(input: UpdateLimitsInput, updatedBy: string):
     }
   }
 
-  await query(`UPDATE dbo.ai_quota_settings SET ${sets.join(', ')} WHERE id = 1`, params)
+  await query(`UPDATE dbo.ai_quota_settings SET ${sets.join(', ')} WHERE client_id = @client_id`, params)
   return getQuotaStats()
 }
 
 export async function resetPeriodCounters(): Promise<QuotaStats> {
   const pool = await getPool()
-  await pool.request().execute('dbo.reset_ai_quota_period')
+  await pool.request().input('p_client_id', sql.Int, getClientId()).execute('dbo.reset_ai_quota_period')
   return getQuotaStats()
 }

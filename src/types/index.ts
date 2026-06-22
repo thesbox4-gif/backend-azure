@@ -8,7 +8,16 @@ export type OrderStatus =
   | 'delivered'
   | 'cancelled'
   | 'refunded'
-export type ProductType = 'saree' | 'jewellery'
+export type ProductType =
+  | 'saree'
+  | 'jewellery'
+  | 'mens_kurta'
+  | 'sherwani'
+  | 'bundi'
+  | 'mens_shirt'
+  | 'mens_tshirt'
+  | 'mens_formal'
+  | 'mens_trouser'
 
 export interface Profile {
   id: string
@@ -42,6 +51,8 @@ export interface Product {
   discount_pct: number
   coupon_code?: string
   coupon_disc?: number
+  barcode?: string
+  block?: boolean
   published: boolean
   created_by?: string
   created_at: string

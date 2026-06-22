@@ -9,6 +9,7 @@ export async function recordOfflineSale(req: AuthRequest, res: Response) {
   const qty = parseInt(req.body.quantity, 10)
   const customer_name = req.body.customer_name?.toString().trim() || null
   const customer_phone = req.body.customer_phone?.toString().trim() || null
+  const amountRaw = req.body.amount
 
   if (!variant_id || !qty || qty <= 0) {
     return res.status(400).json({ error: 'variant_id and a positive quantity are required' })
@@ -25,17 +26,29 @@ export async function recordOfflineSale(req: AuthRequest, res: Response) {
     return res.status(400).json({ error: `Only ${variant.quantity} in stock` })
   }
 
-  const base = Number(variant.base_price ?? 0)
-  const disc = Number(variant.discount_pct ?? 0)
-  const unit_price = Math.round(base * (1 - disc / 100))
+  let unit_price: number
+  let amount: number
+  if (amountRaw != null && amountRaw !== '') {
+    amount = Number(amountRaw)
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ error: 'amount must be a positive number' })
+    }
+    unit_price = Math.round((amount / qty) * 100) / 100
+  } else {
+    const base = Number(variant.base_price ?? 0)
+    const disc = Number(variant.discount_pct ?? 0)
+    unit_price = Math.round(base * (1 - disc / 100))
+    amount = Math.round(unit_price * qty * 100) / 100
+  }
 
   const sale = await queryOne(
-    `INSERT INTO dbo.offline_sales (id, variant_id, product_id, sold_by, quantity, unit_price, customer_name, customer_phone, created_at)
+    `INSERT INTO dbo.offline_sales (id, variant_id, product_id, sold_by, quantity, unit_price, amount, customer_name, customer_phone, created_at)
      OUTPUT inserted.*
-     VALUES (@id, @vid, @pid, @soldby, @qty, @price, @cname, @cphone, SYSDATETIMEOFFSET())`,
+     VALUES (@id, @vid, @pid, @soldby, @qty, @price, @amount, @cname, @cphone, SYSDATETIMEOFFSET())`,
     {
       id: uuidParam(randomUUID()), vid: uuidParam(variant_id), pid: uuidParam(variant.product_id),
-      soldby: uuidParam(req.user!.id), qty, price: unit_price, cname: customer_name, cphone: customer_phone,
+      soldby: uuidParam(req.user!.id), qty, price: unit_price, amount,
+      cname: customer_name, cphone: customer_phone,
     }
   )
 
@@ -47,6 +60,44 @@ export async function recordOfflineSale(req: AuthRequest, res: Response) {
     .execute('dbo.decrement_variant_stock')
 
   res.status(201).json(sale)
+}
+
+function offlineSaleAmountExpr(prefix = ''): string {
+  const p = prefix ? `${prefix}.` : ''
+  return `COALESCE(${p}amount, ${p}unit_price * ${p}quantity)`
+}
+
+export async function fetchOfflineSalesTotals(filters: {
+  soldBy?: string
+  since?: string
+} = {}): Promise<{ totalAmount: number; saleCount: number; itemsSold: number }> {
+  const where: string[] = []
+  const params: Record<string, unknown> = {}
+
+  if (filters.soldBy) {
+    where.push('sold_by = @sold')
+    params.sold = uuidParam(filters.soldBy)
+  }
+  if (filters.since) {
+    where.push('created_at >= @since')
+    params.since = filters.since
+  }
+
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
+  const row = await queryOne<Record<string, number>>(
+    `SELECT
+       ISNULL(SUM(${offlineSaleAmountExpr()}), 0) AS totalAmount,
+       COUNT(*) AS saleCount,
+       ISNULL(SUM(quantity), 0) AS itemsSold
+     FROM dbo.offline_sales ${whereSql}`,
+    params
+  )
+
+  return {
+    totalAmount: Number(row?.totalAmount ?? 0),
+    saleCount: Number(row?.saleCount ?? 0),
+    itemsSold: Number(row?.itemsSold ?? 0),
+  }
 }
 
 // List offline sales. Employees see only their own; admins see all.

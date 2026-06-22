@@ -38,7 +38,17 @@ function parseOrder(row: Record<string, unknown> | null): OrderRecord | null {
   }
 }
 
-const WEIGHT_KG: Record<string, number> = { saree: 0.5, jewellery: 0.2 }
+const WEIGHT_KG: Record<string, number> = {
+  saree: 0.5,
+  jewellery: 0.2,
+  mens_kurta: 0.45,
+  sherwani: 0.7,
+  bundi: 0.25,
+  mens_shirt: 0.3,
+  mens_tshirt: 0.25,
+  mens_formal: 0.65,
+  mens_trouser: 0.4,
+}
 
 function defaultWeightKg(items: Array<{ quantity: number; product?: { type?: string } | null }>): number {
   let total = 0

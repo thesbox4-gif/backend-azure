@@ -1,5 +1,15 @@
 import { GoogleGenAI } from '@google/genai'
-import { jewelleryPrompt, sareePrompt } from './prompts'
+import {
+  bundiPrompt,
+  jewelleryPrompt,
+  mensFormalPrompt,
+  mensKurtaPrompt,
+  mensShirtPrompt,
+  mensTrouserPrompt,
+  mensTshirtPrompt,
+  sareePrompt,
+  sherwaniPrompt,
+} from './prompts'
 
 // "Nano banana" = Gemini 2.5 Flash Image. Override via env if the model id changes.
 const IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-2.5-flash-image'
@@ -26,8 +36,27 @@ interface GenerateImageInput {
 }
 
 function promptForType(productType?: string): string {
-  const t = (productType || '').toLowerCase()
+  const t = (productType || '').toLowerCase().replace(/\s+/g, '_')
   if (t === 'jewellery' || t === 'jewelry' || t === 'gold') return jewelleryPrompt()
+  if (t === 'mens_kurta' || t === 'mens-kurta' || t === 'men_kurta' || t === 'kurta_men') return mensKurtaPrompt()
+  if (t === 'sherwani' || t === 'bandhgala' || t === 'jodhpuri' || t === 'achkan') return sherwaniPrompt()
+  if (t === 'bundi' || t === 'bandi' || t === 'bunnies' || t === 'bundhi' || t === 'nehru_jacket') return bundiPrompt()
+  if (
+    t === 'mens_shirt' || t === 'mens-shirt' || t === 'shirt' || t === 'formal_shirt' ||
+    t === 'check_shirt' || t === 'checked_shirt' || t === 'casual_shirt' || t === 'checks'
+  ) return mensShirtPrompt()
+  if (
+    t === 'mens_tshirt' || t === 'mens-tshirt' || t === 'tshirt' || t === 't_shirt' ||
+    t === 'tee' || t === 'polo' || t === 'polo_shirt'
+  ) return mensTshirtPrompt()
+  if (
+    t === 'mens_formal' || t === 'mens-formal' || t === 'formal' || t === 'shirt_pant' ||
+    t === 'suit' || t === 'blazer' || t === 'office_wear' || t === 'formal_wear'
+  ) return mensFormalPrompt()
+  if (
+    t === 'mens_trouser' || t === 'mens-trouser' || t === 'trouser' || t === 'trousers' ||
+    t === 'pants' || t === 'formal_pant' || t === 'chinos' || t === 'chino'
+  ) return mensTrouserPrompt()
   return sareePrompt()
 }
 

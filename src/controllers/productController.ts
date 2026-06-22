@@ -9,7 +9,7 @@ import { AuthRequest } from '../middleware/auth'
 // as JSON (not escaped strings). Column alias `p` must be set by the caller.
 const productJsonCols = `
   p.id, p.title, p.description, p.type, p.category_id, p.base_price, p.discount_pct,
-  p.coupon_code, p.coupon_disc, p.published, p.created_by, p.created_at, p.updated_at,
+  p.coupon_code, p.coupon_disc, p.published, p.barcode, p.block, p.created_by, p.created_at, p.updated_at,
   JSON_QUERY((
     SELECT c.id, c.name, c.slug FROM dbo.categories c WHERE c.id = p.category_id
     FOR JSON PATH, INCLUDE_NULL_VALUES, WITHOUT_ARRAY_WRAPPER
@@ -32,6 +32,7 @@ function parseProductRow(row: Record<string, unknown>) {
   return {
     ...row,
     published: !!row.published,
+    block: !!row.block,
     category: row.category ? JSON.parse(row.category as string) : null,
     images: row.images ? JSON.parse(row.images as string) : [],
     variants: row.variants ? JSON.parse(row.variants as string) : [],
@@ -109,19 +110,21 @@ export async function getProductById(req: Request, res: Response) {
 }
 
 export async function createProduct(req: AuthRequest, res: Response) {
-  const { title, description, type, category_id, base_price, discount_pct, coupon_code, coupon_disc } = req.body
+  const { title, description, type, category_id, base_price, discount_pct, coupon_code, coupon_disc, barcode, block } = req.body
   const id = randomUUID()
 
   try {
     const data = await queryOne(
-      `INSERT INTO dbo.products (id, title, description, type, category_id, base_price, discount_pct, coupon_code, coupon_disc, created_by, published, created_at, updated_at)
+      `INSERT INTO dbo.products (id, title, description, type, category_id, base_price, discount_pct, coupon_code, coupon_disc, barcode, block, created_by, published, created_at, updated_at)
        OUTPUT inserted.*
-       VALUES (@id, @title, @description, @type, @category_id, @base_price, @discount_pct, @coupon_code, @coupon_disc, @created_by, 0, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET())`,
+       VALUES (@id, @title, @description, @type, @category_id, @base_price, @discount_pct, @coupon_code, @coupon_disc, @barcode, @block, @created_by, 0, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET())`,
       {
         id: uuidParam(id), title, description: description ?? null, type,
         category_id: uuidParam(category_id || null),
         base_price, discount_pct: discount_pct ?? 0,
         coupon_code: coupon_code || null, coupon_disc: coupon_disc || null,
+        barcode: barcode?.toString().trim() || null,
+        block: block === true || block === 1 || block === '1' || block === 'true' ? 1 : 0,
         created_by: uuidParam(req.user!.id),
       }
     )
@@ -132,13 +135,16 @@ export async function createProduct(req: AuthRequest, res: Response) {
 }
 
 export async function updateProduct(req: AuthRequest, res: Response) {
-  const allowed = ['title', 'description', 'type', 'category_id', 'base_price', 'discount_pct', 'coupon_code', 'coupon_disc']
+  const allowed = ['title', 'description', 'type', 'category_id', 'base_price', 'discount_pct', 'coupon_code', 'coupon_disc', 'barcode', 'block']
   const sets: string[] = ['updated_at = SYSDATETIMEOFFSET()']
   const params: Record<string, unknown> = { id: uuidParam(req.params.id) }
   for (const key of allowed) {
     if (req.body[key] !== undefined) {
       sets.push(`${key} = @${key}`)
-      params[key] = key === 'category_id' ? uuidParam(req.body[key] || null) : req.body[key]
+      if (key === 'category_id') params[key] = uuidParam(req.body[key] || null)
+      else if (key === 'barcode') params[key] = req.body[key]?.toString().trim() || null
+      else if (key === 'block') params[key] = req.body[key] === true || req.body[key] === 1 || req.body[key] === '1' || req.body[key] === 'true' ? 1 : 0
+      else params[key] = req.body[key]
     }
   }
 

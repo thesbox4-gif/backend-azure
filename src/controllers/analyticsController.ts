@@ -1,12 +1,13 @@
 import { Response } from 'express'
 import { query, queryOne, getPool, datetimeParam } from '../db'
 import { AuthRequest } from '../middleware/auth'
+import { fetchOfflineSalesTotals } from './salesController'
 
 function monthStartISO(): string {
   return new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()
 }
 
-export async function getDashboardStats(_req: AuthRequest, res: Response) {
+export async function getDashboardStats(req: AuthRequest, res: Response) {
   const monthStart = monthStartISO()
   const params = { monthStart: datetimeParam(monthStart) }
 
@@ -21,12 +22,16 @@ export async function getDashboardStats(_req: AuthRequest, res: Response) {
        (SELECT COUNT(*) FROM dbo.products WHERE published = 1) AS totalProducts,
        (SELECT COUNT(*) FROM dbo.profiles WHERE role = 'customer') AS totalCustomers,
        (SELECT COUNT(*) FROM dbo.profiles WHERE role = 'employee') AS totalEmployees,
-       (SELECT ISNULL(SUM(unit_price * quantity),0) FROM dbo.offline_sales) AS offlineRevenue,
-       (SELECT ISNULL(SUM(unit_price * quantity),0) FROM dbo.offline_sales WHERE created_at >= @monthStart) AS offlineRevenueMonth`,
+       (SELECT ISNULL(SUM(COALESCE(amount, unit_price * quantity)),0) FROM dbo.offline_sales) AS offlineRevenue,
+       (SELECT ISNULL(SUM(COALESCE(amount, unit_price * quantity)),0) FROM dbo.offline_sales WHERE created_at >= @monthStart) AS offlineRevenueMonth`,
     params
   )
 
   const r = row!
+  const mySales = await fetchOfflineSalesTotals(
+    req.user!.role === 'employee' ? { soldBy: req.user!.id } : {}
+  )
+
   res.json({
     totalRevenue: Number(r.onlineRevenue) + Number(r.offlineRevenue),
     revenueThisMonth: Number(r.onlineRevenueMonth) + Number(r.offlineRevenueMonth),
@@ -39,6 +44,7 @@ export async function getDashboardStats(_req: AuthRequest, res: Response) {
     totalProducts: Number(r.totalProducts),
     totalCustomers: Number(r.totalCustomers),
     totalEmployees: Number(r.totalEmployees),
+    mySales,
   })
 }
 
@@ -80,7 +86,7 @@ export async function getEmployeePerformance(req: AuthRequest, res: Response) {
 
   const rows = await query<{ id: string; name: string; revenue: number; itemsSold: number; saleCount: number }>(
     `SELECT pr.id, MAX(pr.name) AS name,
-            SUM(os.unit_price * os.quantity) AS revenue,
+            SUM(COALESCE(os.amount, os.unit_price * os.quantity)) AS revenue,
             SUM(os.quantity) AS itemsSold,
             COUNT(*) AS saleCount
      FROM dbo.offline_sales os JOIN dbo.profiles pr ON pr.id = os.sold_by
@@ -99,7 +105,7 @@ export async function getSalesSummary(_req: AuthRequest, res: Response) {
     `SELECT
        (SELECT ISNULL(SUM(total_amount),0) FROM dbo.orders WHERE status <> 'cancelled') AS onlineRevenue,
        (SELECT COUNT(*) FROM dbo.orders WHERE status <> 'cancelled') AS onlineCount,
-       (SELECT ISNULL(SUM(unit_price * quantity),0) FROM dbo.offline_sales) AS offlineRevenue,
+       (SELECT ISNULL(SUM(COALESCE(amount, unit_price * quantity)),0) FROM dbo.offline_sales) AS offlineRevenue,
        (SELECT COUNT(*) FROM dbo.offline_sales) AS offlineCount`
   )
   const r = row!
@@ -165,7 +171,7 @@ export async function getCategorySales(_req: AuthRequest, res: Response) {
        SELECT ISNULL(p.type, 'unknown') AS type, oi.quantity * oi.unit_price AS revenue, oi.quantity AS cnt
        FROM dbo.order_items oi LEFT JOIN dbo.products p ON p.id = oi.product_id
        UNION ALL
-       SELECT ISNULL(p.type, 'unknown') AS type, os.quantity * os.unit_price AS revenue, os.quantity AS cnt
+       SELECT ISNULL(p.type, 'unknown') AS type, COALESCE(os.amount, os.quantity * os.unit_price) AS revenue, os.quantity AS cnt
        FROM dbo.offline_sales os LEFT JOIN dbo.products p ON p.id = os.product_id
      ) t GROUP BY type ORDER BY revenue DESC`
   )

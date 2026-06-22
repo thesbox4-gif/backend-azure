@@ -1,5 +1,5 @@
 /**
- * Quick benchmark: node --import tsx scripts/bench-ai-image.ts [saree|jewellery]
+ * Quick benchmark: node --import tsx scripts/bench-ai-image.ts [saree|jewellery|mens_kurta|sherwani|bundi|mens_shirt|mens_tshirt|mens_formal|mens_trouser]
  * Requires GOOGLE_GEMINI_API_KEY in backend/.env
  */
 import 'dotenv/config'
@@ -26,10 +26,20 @@ async function main() {
   const prepMs = Date.now() - prepStart
 
   const geminiStart = Date.now()
+  const normalized =
+    type === 'jewellery' || type === 'gold' ? 'jewellery'
+    : type === 'mens_kurta' || type === 'mens-kurta' ? 'mens_kurta'
+    : type === 'sherwani' || type === 'bandhgala' ? 'sherwani'
+    : type === 'bundi' || type === 'bandi' || type === 'bunnies' ? 'bundi'
+    : ['mens_shirt', 'mens-shirt', 'shirt', 'checks', 'check_shirt'].includes(type) ? 'mens_shirt'
+    : ['mens_tshirt', 'mens-tshirt', 'tshirt', 't_shirt', 'polo'].includes(type) ? 'mens_tshirt'
+    : ['mens_formal', 'mens-formal', 'formal', 'suit', 'shirt_pant', 'blazer'].includes(type) ? 'mens_formal'
+    : ['mens_trouser', 'mens-trouser', 'trouser', 'pants', 'chinos'].includes(type) ? 'mens_trouser'
+    : 'saree'
   await generateProductImage({
     imageBase64: buffer.toString('base64'),
     mimeType,
-    productType: type === 'jewellery' || type === 'gold' ? 'jewellery' : 'saree',
+    productType: normalized,
     color: 'test',
     category: 'test',
   })
