@@ -30,6 +30,9 @@ import salesRoutes from './routes/sales'
 import userRoutes from './routes/users'
 import shipmentRoutes from './routes/shipments'
 import superadminRoutes from './routes/superadmin'
+import settingsRoutes from './routes/settings'
+import productEnquiriesRoutes from './routes/productEnquiries'
+import videoBookingsRoutes from './routes/videoBookings'
 
 const app = express()
 
@@ -75,6 +78,9 @@ app.use('/api/sales', salesRoutes)
 app.use('/api/users', userRoutes)
 app.use('/api/shipments', shipmentRoutes)
 app.use('/api/superadmin', superadminRoutes)
+app.use('/api/settings', settingsRoutes)
+app.use('/api/product-enquiries', productEnquiriesRoutes)
+app.use('/api/video-bookings', videoBookingsRoutes)
 
 app.use(notFound)
 app.use(errorHandler)
