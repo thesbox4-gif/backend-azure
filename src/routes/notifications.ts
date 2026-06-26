@@ -1,6 +1,7 @@
 import { Router, Response } from 'express'
 import { query, uuidParam } from '../db'
-import { authenticate, AuthRequest } from '../middleware/auth'
+import { authenticate, requireRole, AuthRequest } from '../middleware/auth'
+import { broadcastNewProduct } from '../controllers/customerNotificationsController'
 
 const router = Router()
 
@@ -34,5 +35,8 @@ router.post('/mark-all-read', async (req: AuthRequest, res: Response) => {
   )
   res.json({ success: true })
 })
+
+// Admin: broadcast new-product notification to all subscribed registered customers
+router.post('/new-product', requireRole('admin'), broadcastNewProduct)
 
 export default router

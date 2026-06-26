@@ -2,6 +2,14 @@ import { Request, Response } from 'express'
 import { randomUUID } from 'crypto'
 import { query, queryOne, uuidParam } from '../db'
 import { AuthRequest } from '../middleware/auth'
+import { scheduleBroadcast } from '../services/broadcastService'
+
+function generateBarcode(): string {
+  const now = new Date()
+  const d = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
+  const rand = String(Math.floor(10000 + Math.random() * 90000))
+  return `YS-${d}-${rand}`
+}
 
 // Reproduces the Supabase embedded-resource shape:
 //   { ...product, category:{id,name,slug}, images:[...], variants:[...] }
@@ -9,7 +17,9 @@ import { AuthRequest } from '../middleware/auth'
 // as JSON (not escaped strings). Column alias `p` must be set by the caller.
 const productJsonCols = `
   p.id, p.title, p.description, p.type, p.category_id, p.base_price, p.discount_pct,
-  p.coupon_code, p.coupon_disc, p.published, p.barcode, p.block, p.created_by, p.created_at, p.updated_at,
+  p.coupon_code, p.coupon_disc, p.published, p.barcode, p.barcode_image_url,
+  p.rack_block, p.rack_row, p.rack_position,
+  p.block, p.created_by, p.created_at, p.updated_at,
   JSON_QUERY((
     SELECT c.id, c.name, c.slug FROM dbo.categories c WHERE c.id = p.category_id
     FOR JSON PATH, INCLUDE_NULL_VALUES, WITHOUT_ARRAY_WRAPPER
@@ -110,20 +120,36 @@ export async function getProductById(req: Request, res: Response) {
 }
 
 export async function createProduct(req: AuthRequest, res: Response) {
-  const { title, description, type, category_id, base_price, discount_pct, coupon_code, coupon_disc, barcode, block } = req.body
+  const {
+    title, description, type, category_id, base_price, discount_pct,
+    coupon_code, coupon_disc, barcode, barcode_image_url, block,
+    rack_block, rack_row, rack_position,
+  } = req.body
   const id = randomUUID()
 
   try {
     const data = await queryOne(
-      `INSERT INTO dbo.products (id, title, description, type, category_id, base_price, discount_pct, coupon_code, coupon_disc, barcode, block, created_by, published, created_at, updated_at)
+      `INSERT INTO dbo.products
+         (id, title, description, type, category_id, base_price, discount_pct,
+          coupon_code, coupon_disc, barcode, barcode_image_url,
+          rack_block, rack_row, rack_position,
+          block, created_by, published, created_at, updated_at)
        OUTPUT inserted.*
-       VALUES (@id, @title, @description, @type, @category_id, @base_price, @discount_pct, @coupon_code, @coupon_disc, @barcode, @block, @created_by, 0, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET())`,
+       VALUES
+         (@id, @title, @description, @type, @category_id, @base_price, @discount_pct,
+          @coupon_code, @coupon_disc, @barcode, @barcode_image_url,
+          @rack_block, @rack_row, @rack_position,
+          @block, @created_by, 0, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET())`,
       {
         id: uuidParam(id), title, description: description ?? null, type,
         category_id: uuidParam(category_id || null),
         base_price, discount_pct: discount_pct ?? 0,
         coupon_code: coupon_code || null, coupon_disc: coupon_disc || null,
-        barcode: barcode?.toString().trim() || null,
+        barcode: barcode?.toString().trim() || generateBarcode(),
+        barcode_image_url: barcode_image_url?.toString().trim() || null,
+        rack_block: rack_block?.toString().trim() || null,
+        rack_row: rack_row?.toString().trim() || null,
+        rack_position: rack_position?.toString().trim() || null,
         block: block === true || block === 1 || block === '1' || block === 'true' ? 1 : 0,
         created_by: uuidParam(req.user!.id),
       }
@@ -135,14 +161,19 @@ export async function createProduct(req: AuthRequest, res: Response) {
 }
 
 export async function updateProduct(req: AuthRequest, res: Response) {
-  const allowed = ['title', 'description', 'type', 'category_id', 'base_price', 'discount_pct', 'coupon_code', 'coupon_disc', 'barcode', 'block']
+  const allowed = [
+    'title', 'description', 'type', 'category_id', 'base_price', 'discount_pct',
+    'coupon_code', 'coupon_disc', 'barcode', 'barcode_image_url', 'block',
+    'rack_block', 'rack_row', 'rack_position',
+  ]
+  const nullableStrings = new Set(['barcode', 'barcode_image_url', 'rack_block', 'rack_row', 'rack_position'])
   const sets: string[] = ['updated_at = SYSDATETIMEOFFSET()']
   const params: Record<string, unknown> = { id: uuidParam(req.params.id) }
   for (const key of allowed) {
     if (req.body[key] !== undefined) {
       sets.push(`${key} = @${key}`)
       if (key === 'category_id') params[key] = uuidParam(req.body[key] || null)
-      else if (key === 'barcode') params[key] = req.body[key]?.toString().trim() || null
+      else if (nullableStrings.has(key)) params[key] = req.body[key]?.toString().trim() || null
       else if (key === 'block') params[key] = req.body[key] === true || req.body[key] === 1 || req.body[key] === '1' || req.body[key] === 'true' ? 1 : 0
       else params[key] = req.body[key]
     }
@@ -161,11 +192,19 @@ export async function updateProduct(req: AuthRequest, res: Response) {
 }
 
 export async function publishProduct(req: AuthRequest, res: Response) {
-  const data = await queryOne(
+  const data = await queryOne<Record<string, unknown>>(
     'UPDATE dbo.products SET published = 1, updated_at = SYSDATETIMEOFFSET() OUTPUT inserted.* WHERE id = @id',
     { id: uuidParam(req.params.id) }
   )
   if (!data) return res.status(404).json({ error: 'Product not found' })
+
+  scheduleBroadcast({
+    productId: data.id as string,
+    title: data.title as string,
+    price: Number(data.base_price),
+    triggeredBy: req.user!.id,
+  })
+
   res.json(data)
 }
 

@@ -33,6 +33,12 @@ import superadminRoutes from './routes/superadmin'
 import settingsRoutes from './routes/settings'
 import productEnquiriesRoutes from './routes/productEnquiries'
 import videoBookingsRoutes from './routes/videoBookings'
+import customerNotificationsRoutes from './routes/customerNotifications'
+import previousBuyersRoutes from './routes/previousBuyers'
+import dashboardRoutes from './routes/dashboard'
+import reengagementRoutes from './routes/reengagement'
+import broadcastRoutes from './routes/broadcast'
+import { reengagementScheduler } from './services/reengagementScheduler'
 
 const app = express()
 
@@ -81,6 +87,11 @@ app.use('/api/superadmin', superadminRoutes)
 app.use('/api/settings', settingsRoutes)
 app.use('/api/product-enquiries', productEnquiriesRoutes)
 app.use('/api/video-bookings', videoBookingsRoutes)
+app.use('/api/customer-notifications', customerNotificationsRoutes)
+app.use('/api/customers', previousBuyersRoutes)
+app.use('/api/dashboard', dashboardRoutes)
+app.use('/api/reengagement', reengagementRoutes)
+app.use('/api/broadcast', broadcastRoutes)
 
 app.use(notFound)
 app.use(errorHandler)
@@ -91,6 +102,7 @@ const server = app.listen(PORT)
 
 server.once('listening', () => {
   logger.info(`Backend running on http://localhost:${PORT}`)
+  reengagementScheduler.start()
 })
 
 server.on('error', (err: NodeJS.ErrnoException) => {
@@ -107,6 +119,7 @@ server.on('error', (err: NodeJS.ErrnoException) => {
 
 const shutdown = async (signal: string) => {
   logger.info({ signal }, 'Received shutdown signal')
+  reengagementScheduler.stop()
   server.close(() => {
     logger.info('Server closed')
     process.exit(0)
