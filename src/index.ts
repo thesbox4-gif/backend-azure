@@ -42,10 +42,17 @@ import { reengagementScheduler } from './services/reengagementScheduler'
 
 const app = express()
 
+// Trim each origin and drop blanks so a stray space in ALLOWED_ORIGINS
+// (e.g. "a.com, https://b.com") can't silently break CORS for a real origin.
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ?.split(',')
+  .map((o) => o.trim())
+  .filter(Boolean)
+
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }))
 app.use(
   cors({
-    origin: process.env.ALLOWED_ORIGINS?.split(',') ?? '*',
+    origin: allowedOrigins && allowedOrigins.length > 0 ? allowedOrigins : '*',
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
