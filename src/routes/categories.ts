@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express'
 import { body, validationResult } from 'express-validator'
 import { randomUUID } from 'crypto'
-import { query, queryOne, uuidParam } from '../db'
+import { query, queryOne, uuidParam, withTransaction, sql } from '../db'
 import { authenticate, requireApprovedEmployee } from '../middleware/auth'
 import { uploadImage } from '../services/storageService'
 import multer from 'multer'
@@ -59,7 +59,11 @@ router.post(
       )
       res.status(201).json(data)
     } catch (err) {
-      res.status(400).json({ error: err instanceof Error ? err.message : 'Create failed' })
+      const message = err instanceof Error ? err.message : 'Create failed'
+      if (/UNIQUE KEY|duplicate key/i.test(message)) {
+        return res.status(409).json({ error: `The slug "${slug}" is already used by another category. Choose a different name or slug.` })
+      }
+      res.status(400).json({ error: message })
     }
   }
 )
@@ -96,37 +100,42 @@ router.patch(
       if (!data) return res.status(404).json({ error: 'Category not found' })
       res.json(data)
     } catch (err) {
-      res.status(400).json({ error: err instanceof Error ? err.message : 'Update failed' })
+      const message = err instanceof Error ? err.message : 'Update failed'
+      if (/UNIQUE KEY|duplicate key/i.test(message)) {
+        return res.status(409).json({ error: `The slug "${params.slug ?? ''}" is already used by another category. Choose a different name or slug.` })
+      }
+      res.status(400).json({ error: message })
     }
   }
 )
 
+// Delete a category and its entire sub-category subtree. Products and coupons that
+// pointed at any of those categories are unlinked (category_id → NULL) rather than
+// deleted, so nothing in the catalog or sales history is lost — affected products
+// simply become "Uncategorized". The recursive CTE collects the whole subtree so a
+// parent like "Silk sare" takes its children ("Kanchipuram silk") with it.
 router.delete('/:id', authenticate, requireApprovedEmployee, async (req: Request, res: Response) => {
   try {
-    const id = uuidParam(req.params.id)
+    await withTransaction(async (_tx, request) => {
+      const bindId = (r: sql.Request) => r.input('id', sql.UniqueIdentifier, req.params.id)
 
-    // Block deletion when other rows still reference this category, and explain why
-    // instead of surfacing the raw SQL foreign-key constraint error.
-    const counts = await queryOne<{ products: number; subcategories: number }>(
-      `SELECT
-         (SELECT COUNT(*) FROM dbo.products WHERE category_id = @id) AS products,
-         (SELECT COUNT(*) FROM dbo.categories WHERE parent_id = @id) AS subcategories`,
-      { id }
-    )
+      const treeCte = `WITH tree AS (
+          SELECT id FROM dbo.categories WHERE id = @id
+          UNION ALL
+          SELECT c.id FROM dbo.categories c JOIN tree t ON c.parent_id = t.id
+        )`
 
-    const productCount = counts?.products ?? 0
-    const subcategoryCount = counts?.subcategories ?? 0
+      await bindId(request()).query(
+        `${treeCte} UPDATE dbo.products SET category_id = NULL WHERE category_id IN (SELECT id FROM tree)`
+      )
+      await bindId(request()).query(
+        `${treeCte} UPDATE dbo.coupons SET category_id = NULL WHERE category_id IN (SELECT id FROM tree)`
+      )
+      await bindId(request()).query(
+        `${treeCte} DELETE FROM dbo.categories WHERE id IN (SELECT id FROM tree)`
+      )
+    })
 
-    if (productCount > 0 || subcategoryCount > 0) {
-      const parts: string[] = []
-      if (productCount > 0) parts.push(`${productCount} product${productCount === 1 ? '' : 's'}`)
-      if (subcategoryCount > 0) parts.push(`${subcategoryCount} subcategor${subcategoryCount === 1 ? 'y' : 'ies'}`)
-      return res.status(409).json({
-        error: `This category still has ${parts.join(' and ')}. Move or delete them first, then delete the category.`,
-      })
-    }
-
-    await query('DELETE FROM dbo.categories WHERE id = @id', { id })
     res.json({ success: true })
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : 'Delete failed' })
