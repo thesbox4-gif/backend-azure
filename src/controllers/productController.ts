@@ -50,7 +50,7 @@ function parseProductRow(row: Record<string, unknown>) {
 }
 
 export async function getAllProducts(req: Request, res: Response) {
-  const { type, category, search, minPrice, maxPrice, page = '1', limit = '20', published, sort } = req.query
+  const { type, category, uncategorized, search, minPrice, maxPrice, page = '1', limit = '20', published, sort } = req.query
 
   const where: string[] = []
   const params: Record<string, unknown> = {}
@@ -60,6 +60,11 @@ export async function getAllProducts(req: Request, res: Response) {
     const arr = (type as string).split(',').map((t) => t.trim()).filter(Boolean)
     where.push(`p.type IN (${arr.map((_, i) => `@type${i}`).join(',')})`)
     arr.forEach((t, i) => (params[`type${i}`] = t))
+  }
+  if (uncategorized === 'true') {
+    // Products with no sub-category: either no category at all, or sitting directly
+    // on a top-level root (which the Collections UI treats as "Uncategorized").
+    where.push('(p.category_id IS NULL OR p.category_id IN (SELECT id FROM dbo.categories WHERE parent_id IS NULL))')
   }
   if (category) {
     const catParam = (category as string).split(',').map((c) => c.trim()).filter(Boolean)
