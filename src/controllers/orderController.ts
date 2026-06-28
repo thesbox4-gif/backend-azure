@@ -140,7 +140,17 @@ export async function createRazorpayOrder(req: AuthRequest, res: Response) {
     addressId = aid
   }
 
-  // Internal order awaiting payment + items, in one transaction
+  // Clear out any earlier unpaid attempt by this user so a failed/abandoned
+  // checkout never lingers as a phantom order. These have no payment id and are
+  // safe to drop — order_items cascade on delete.
+  await query(
+    "DELETE FROM dbo.orders WHERE user_id = @uid AND status = 'placed' AND razorpay_payment_id IS NULL",
+    { uid: uuidParam(userId) }
+  )
+
+  // Pending order awaiting payment. It stays 'placed' (and is excluded from every
+  // sales/revenue/listing query) until verifyPayment confirms a real payment.
+  // Coupon usage is NOT incremented here — only on successful payment.
   const orderId = randomUUID()
   await query(
     `INSERT INTO dbo.orders (id, user_id, address_id, status, total_amount, discount_amount, coupon_applied, created_at, updated_at)
@@ -154,9 +164,6 @@ export async function createRazorpayOrder(req: AuthRequest, res: Response) {
       { id: uuidParam(randomUUID()), oid: uuidParam(orderId), pid: uuidParam(i.product_id), vid: uuidParam(i.variant_id), qty: i.quantity, price: i.unit_price }
     )
   }
-  if (couponCode) {
-    await getPool().then((p) => p.request().input('code', couponCode).execute('dbo.increment_coupon_usage'))
-  }
 
   const rzpOrder = await razorpay.orders.create({
     amount: Math.round(total * 100),
@@ -167,7 +174,15 @@ export async function createRazorpayOrder(req: AuthRequest, res: Response) {
   res.json({ razorpay_order_id: rzpOrder.id, amount: rzpOrder.amount, currency: rzpOrder.currency, order_id: orderId })
 }
 
-export async function placeOrder(req: AuthRequest, res: Response) {
+export async function placeOrder(_req: AuthRequest, res: Response) {
+  // Orders are only ever created through the paid Razorpay flow
+  // (createRazorpayOrder → verifyPayment). This legacy direct-create path would
+  // produce an unpaid order, so it is disabled.
+  return res.status(400).json({ error: 'Orders must be placed through checkout. Please complete payment to place your order.' })
+}
+
+// Legacy direct order creation — intentionally unreachable (see placeOrder above).
+export async function placeOrderLegacy(req: AuthRequest, res: Response) {
   const { address_id, items, coupon_code, total_amount, discount_amount = 0 } = req.body
   if (!items?.length) return res.status(400).json({ error: 'Order must have at least one item' })
 
@@ -216,13 +231,16 @@ export async function verifyPayment(req: AuthRequest, res: Response) {
     return res.status(400).json({ error: 'Payment signature mismatch' })
   }
 
-  const order = await queryOne<{ id: string }>(
+  // Only a still-pending ('placed') order is confirmed here. The status guard makes
+  // this idempotent — a duplicate verify call won't double-decrement stock or
+  // double-count the coupon, because the row is no longer 'placed' the second time.
+  const order = await queryOne<{ id: string; coupon_applied: string | null }>(
     `UPDATE dbo.orders SET status = 'confirmed', razorpay_order_id = @roid, razorpay_payment_id = @rpid, updated_at = SYSDATETIMEOFFSET()
-     OUTPUT inserted.id
-     WHERE id = @id AND user_id = @uid`,
+     OUTPUT inserted.id, inserted.coupon_applied
+     WHERE id = @id AND user_id = @uid AND status = 'placed'`,
     { roid: razorpay_order_id, rpid: razorpay_payment_id, id: uuidParam(order_id), uid: uuidParam(req.user!.id) }
   )
-  if (!order) return res.status(400).json({ error: 'Order not found' })
+  if (!order) return res.status(400).json({ error: 'Order not found or already processed' })
 
   const orderItems = await query<{ variant_id: string; quantity: number }>(
     'SELECT variant_id, quantity FROM dbo.order_items WHERE order_id = @oid',
@@ -236,6 +254,11 @@ export async function verifyPayment(req: AuthRequest, res: Response) {
       .execute('dbo.decrement_variant_stock')
   }
 
+  // Consume coupon usage only now that payment is confirmed.
+  if (order.coupon_applied) {
+    await pool.request().input('code', order.coupon_applied).execute('dbo.increment_coupon_usage')
+  }
+
   await query('DELETE FROM dbo.cart_items WHERE user_id = @uid', { uid: uuidParam(req.user!.id) })
 
   const full = parseOrderRow(await queryOne(`SELECT ${orderJsonCols} FROM dbo.orders o WHERE o.id = @id`, { id: uuidParam(order_id) }))
@@ -247,7 +270,10 @@ export async function verifyPayment(req: AuthRequest, res: Response) {
 export async function getOrders(req: AuthRequest, res: Response) {
   const { status, userId, page = '1', limit = '20' } = req.query
 
-  const where: string[] = []
+  const where: string[] = [
+    // Hide unpaid/abandoned checkout attempts — they are not real orders until paid.
+    "NOT (o.status = 'placed' AND o.razorpay_payment_id IS NULL)",
+  ]
   const params: Record<string, unknown> = { offset: (+page - 1) * +limit, limit: +limit }
   if (req.user!.role === 'customer') { where.push('o.user_id = @uid'); params.uid = uuidParam(req.user!.id) }
   else if (userId) { where.push('o.user_id = @uid'); params.uid = uuidParam(userId as string) }

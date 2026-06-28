@@ -13,10 +13,10 @@ export async function getDashboardStats(req: AuthRequest, res: Response) {
 
   const row = await queryOne<Record<string, number>>(
     `SELECT
-       (SELECT ISNULL(SUM(total_amount),0) FROM dbo.orders WHERE status <> 'cancelled') AS onlineRevenue,
-       (SELECT ISNULL(SUM(total_amount),0) FROM dbo.orders WHERE status <> 'cancelled' AND created_at >= @monthStart) AS onlineRevenueMonth,
-       (SELECT COUNT(*) FROM dbo.orders) AS totalOrders,
-       (SELECT COUNT(*) FROM dbo.orders WHERE status = 'placed') AS pendingOrders,
+       (SELECT ISNULL(SUM(total_amount),0) FROM dbo.orders WHERE status <> 'cancelled' AND razorpay_payment_id IS NOT NULL) AS onlineRevenue,
+       (SELECT ISNULL(SUM(total_amount),0) FROM dbo.orders WHERE status <> 'cancelled' AND razorpay_payment_id IS NOT NULL AND created_at >= @monthStart) AS onlineRevenueMonth,
+       (SELECT COUNT(*) FROM dbo.orders WHERE status <> 'cancelled' AND razorpay_payment_id IS NOT NULL) AS totalOrders,
+       (SELECT COUNT(*) FROM dbo.orders WHERE status IN ('confirmed','processing')) AS pendingOrders,
        (SELECT COUNT(*) FROM dbo.variants WHERE quantity > 0 AND quantity < 5) AS lowStockVariants,
        (SELECT COUNT(*) FROM dbo.variants WHERE quantity = 0) AS outOfStockVariants,
        (SELECT COUNT(*) FROM dbo.products WHERE published = 1) AS totalProducts,
@@ -103,8 +103,8 @@ export async function getEmployeePerformance(req: AuthRequest, res: Response) {
 export async function getSalesSummary(_req: AuthRequest, res: Response) {
   const row = await queryOne<Record<string, number>>(
     `SELECT
-       (SELECT ISNULL(SUM(total_amount),0) FROM dbo.orders WHERE status <> 'cancelled') AS onlineRevenue,
-       (SELECT COUNT(*) FROM dbo.orders WHERE status <> 'cancelled') AS onlineCount,
+       (SELECT ISNULL(SUM(total_amount),0) FROM dbo.orders WHERE status <> 'cancelled' AND razorpay_payment_id IS NOT NULL) AS onlineRevenue,
+       (SELECT COUNT(*) FROM dbo.orders WHERE status <> 'cancelled' AND razorpay_payment_id IS NOT NULL) AS onlineCount,
        (SELECT ISNULL(SUM(COALESCE(amount, unit_price * quantity)),0) FROM dbo.offline_sales) AS offlineRevenue,
        (SELECT COUNT(*) FROM dbo.offline_sales) AS offlineCount`
   )
@@ -169,7 +169,9 @@ export async function getCategorySales(_req: AuthRequest, res: Response) {
   const rows = await query<{ type: string; revenue: number; count: number }>(
     `SELECT type, SUM(revenue) AS revenue, SUM(cnt) AS count FROM (
        SELECT ISNULL(p.type, 'unknown') AS type, oi.quantity * oi.unit_price AS revenue, oi.quantity AS cnt
-       FROM dbo.order_items oi LEFT JOIN dbo.products p ON p.id = oi.product_id
+       FROM dbo.order_items oi
+       JOIN dbo.orders o ON o.id = oi.order_id AND o.status <> 'cancelled' AND o.razorpay_payment_id IS NOT NULL
+       LEFT JOIN dbo.products p ON p.id = oi.product_id
        UNION ALL
        SELECT ISNULL(p.type, 'unknown') AS type, COALESCE(os.amount, os.quantity * os.unit_price) AS revenue, os.quantity AS cnt
        FROM dbo.offline_sales os LEFT JOIN dbo.products p ON p.id = os.product_id
