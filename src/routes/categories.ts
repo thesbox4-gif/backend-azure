@@ -103,7 +103,30 @@ router.patch(
 
 router.delete('/:id', authenticate, requireApprovedEmployee, async (req: Request, res: Response) => {
   try {
-    await query('DELETE FROM dbo.categories WHERE id = @id', { id: uuidParam(req.params.id) })
+    const id = uuidParam(req.params.id)
+
+    // Block deletion when other rows still reference this category, and explain why
+    // instead of surfacing the raw SQL foreign-key constraint error.
+    const counts = await queryOne<{ products: number; subcategories: number }>(
+      `SELECT
+         (SELECT COUNT(*) FROM dbo.products WHERE category_id = @id) AS products,
+         (SELECT COUNT(*) FROM dbo.categories WHERE parent_id = @id) AS subcategories`,
+      { id }
+    )
+
+    const productCount = counts?.products ?? 0
+    const subcategoryCount = counts?.subcategories ?? 0
+
+    if (productCount > 0 || subcategoryCount > 0) {
+      const parts: string[] = []
+      if (productCount > 0) parts.push(`${productCount} product${productCount === 1 ? '' : 's'}`)
+      if (subcategoryCount > 0) parts.push(`${subcategoryCount} subcategor${subcategoryCount === 1 ? 'y' : 'ies'}`)
+      return res.status(409).json({
+        error: `This category still has ${parts.join(' and ')}. Move or delete them first, then delete the category.`,
+      })
+    }
+
+    await query('DELETE FROM dbo.categories WHERE id = @id', { id })
     res.json({ success: true })
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : 'Delete failed' })
