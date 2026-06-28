@@ -1,6 +1,6 @@
 import { Request, Response } from 'express'
 import { randomUUID } from 'crypto'
-import { query, queryOne, uuidParam } from '../db'
+import { query, queryOne, uuidParam, withTransaction, sql } from '../db'
 import { AuthRequest } from '../middleware/auth'
 import { scheduleBroadcast } from '../services/broadcastService'
 
@@ -219,10 +219,54 @@ export async function unpublishProduct(req: AuthRequest, res: Response) {
 
 export async function deleteProduct(req: AuthRequest, res: Response) {
   try {
-    await query('DELETE FROM dbo.products WHERE id = @id', { id: uuidParam(req.params.id) })
+    const id = req.params.id
+
+    await withTransaction(async (_tx, request) => {
+      const bindId = (r: sql.Request) => r.input('id', sql.UniqueIdentifier, id)
+
+      // A product that has been sold (online orders or offline sales) must not be
+      // hard-deleted — that would corrupt historical sales/revenue reports. Sales
+      // rows may reference either the product directly or one of its variants, so
+      // we check both.
+      const salesRes = await bindId(request()).query<{ orderItems: number; offlineSales: number }>(
+        `SELECT
+           (SELECT COUNT(*) FROM dbo.order_items
+              WHERE product_id = @id
+                 OR variant_id IN (SELECT id FROM dbo.variants WHERE product_id = @id)) AS orderItems,
+           (SELECT COUNT(*) FROM dbo.offline_sales
+              WHERE product_id = @id
+                 OR variant_id IN (SELECT id FROM dbo.variants WHERE product_id = @id)) AS offlineSales`
+      )
+      const row = salesRes.recordset[0]
+      const salesCount = (row?.orderItems ?? 0) + (row?.offlineSales ?? 0)
+      if (salesCount > 0) {
+        const e = new Error(
+          'This product has sales records and cannot be deleted (it would corrupt your order history and reports). ' +
+            'Unpublish it instead to hide it from customers.'
+        ) as Error & { httpStatus?: number }
+        e.httpStatus = 409
+        throw e
+      }
+
+      // Clean up transient references that would otherwise block the delete. These
+      // can point at the product or at its variants (cart_items.variant_id has no
+      // cascade), so clear both. product_images and variants themselves are removed
+      // automatically via ON DELETE CASCADE when the product row goes.
+      await bindId(request()).query(
+        `DELETE FROM dbo.cart_items
+          WHERE product_id = @id
+             OR variant_id IN (SELECT id FROM dbo.variants WHERE product_id = @id)`
+      )
+      await bindId(request()).query('DELETE FROM dbo.wishlist_items WHERE product_id = @id')
+      await bindId(request()).query('DELETE FROM dbo.coupons WHERE product_id = @id')
+
+      await bindId(request()).query('DELETE FROM dbo.products WHERE id = @id')
+    })
+
     res.json({ success: true })
   } catch (err) {
-    res.status(400).json({ error: err instanceof Error ? err.message : 'Delete failed' })
+    const status = (err as { httpStatus?: number }).httpStatus ?? 400
+    res.status(status).json({ error: err instanceof Error ? err.message : 'Delete failed' })
   }
 }
 
