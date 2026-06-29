@@ -37,10 +37,15 @@ export function initFirebase(): boolean {
     return false
   }
 
-  initializeApp({ credential: cert(serviceAccount) })
-  initialized = true
-  logger.info({ projectId: serviceAccount.projectId }, 'Firebase Admin initialized')
-  return true
+  try {
+    initializeApp({ credential: cert(serviceAccount) })
+    initialized = true
+    logger.info({ projectId: serviceAccount.projectId }, 'Firebase Admin initialized')
+    return true
+  } catch (err) {
+    logger.warn({ err }, 'Firebase init failed — push notifications disabled (check FIREBASE_PRIVATE_KEY format)')
+    return false
+  }
 }
 
 export function isFirebaseReady(): boolean {

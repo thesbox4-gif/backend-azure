@@ -304,6 +304,15 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='idx_ai_usage_log_type' AND 
 GO
 
 -- ── migrations (idempotent column adds) ─────────────────────
+
+-- Add upload quota columns to ai_quota_settings (client_id is the PK in the live DB)
+IF COL_LENGTH('dbo.ai_quota_settings', 'upload_limit') IS NULL
+  ALTER TABLE dbo.ai_quota_settings ADD upload_limit int NULL;
+GO
+IF COL_LENGTH('dbo.ai_quota_settings', 'uploads_used') IS NULL
+  ALTER TABLE dbo.ai_quota_settings ADD uploads_used int NOT NULL CONSTRAINT df_aiq_uploads_used DEFAULT 0;
+GO
+
 IF COL_LENGTH('dbo.products', 'barcode') IS NULL
   ALTER TABLE dbo.products ADD barcode nvarchar(255) NULL;
 GO

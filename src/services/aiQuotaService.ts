@@ -1,13 +1,13 @@
 import { query, queryOne, getPool, uuidParam, sql } from '../db'
 
-export type AiUsageType = 'image' | 'content'
+export type AiUsageType = 'image' | 'content' | 'upload'
 export type ResetPeriod = 'lifetime' | 'monthly'
 
 export class QuotaExceededError extends Error {
   readonly usageType: AiUsageType
   constructor(usageType: AiUsageType) {
-    const label = usageType === 'image' ? 'image' : 'content'
-    super(`AI ${label} quota exhausted. Contact platform admin.`)
+    const label = usageType === 'image' ? 'AI image generation' : usageType === 'upload' ? 'image upload' : 'content generation'
+    super(`${label} limit reached. Contact your administrator to increase the limit.`)
     this.name = 'QuotaExceededError'
     this.usageType = usageType
   }
@@ -123,4 +123,85 @@ export async function resetPeriodCounters(): Promise<QuotaStats> {
   const pool = await getPool()
   await pool.request().input('p_client_id', sql.Int, getClientId()).execute('dbo.reset_ai_quota_period')
   return getQuotaStats()
+}
+
+// ── Env-based image limits ────────────────────────────────────
+// IMAGE_UPLOAD_LIMIT and AI_IMAGE_LIMIT in .env are synced into
+// ai_quota_settings on startup (syncImageLimitsFromEnv). The runtime check
+// reads the limit from the DB and atomically increments the counter so there
+// is no race condition between concurrent requests.
+
+export async function syncImageLimitsFromEnv(): Promise<void> {
+  const aiImageLimit = process.env.AI_IMAGE_LIMIT ? parseInt(process.env.AI_IMAGE_LIMIT, 10) : null
+  const uploadLimit = process.env.IMAGE_UPLOAD_LIMIT ? parseInt(process.env.IMAGE_UPLOAD_LIMIT, 10) : null
+
+  if (aiImageLimit === null && uploadLimit === null) return
+
+  const clientId = getClientId()
+  const pool = await getPool()
+
+  // Ensure the row exists before updating.
+  await pool.request()
+    .input('client_id', sql.Int, clientId)
+    .query(
+      `IF NOT EXISTS (SELECT 1 FROM dbo.ai_quota_settings WHERE client_id = @client_id)
+         INSERT INTO dbo.ai_quota_settings (client_id) VALUES (@client_id)`
+    )
+
+  const sets: string[] = []
+  const req = pool.request().input('client_id', sql.Int, clientId)
+
+  if (aiImageLimit !== null && Number.isFinite(aiImageLimit) && aiImageLimit >= 0) {
+    sets.push('image_limit = @image_limit')
+    req.input('image_limit', sql.Int, aiImageLimit)
+  }
+  if (uploadLimit !== null && Number.isFinite(uploadLimit) && uploadLimit >= 0) {
+    sets.push('upload_limit = @upload_limit')
+    req.input('upload_limit', sql.Int, uploadLimit)
+  }
+
+  if (sets.length > 0) {
+    await req.query(`UPDATE dbo.ai_quota_settings SET ${sets.join(', ')} WHERE client_id = @client_id`)
+  }
+}
+
+export async function decrementLimit(type: 'image' | 'upload'): Promise<void> {
+  const usedCol = type === 'image' ? 'images_used' : 'uploads_used'
+  const clientId = getClientId()
+  const pool = await getPool()
+  await pool.request()
+    .input('client_id', sql.Int, clientId)
+    .query(
+      `UPDATE dbo.ai_quota_settings
+          SET ${usedCol} = CASE WHEN ${usedCol} > 0 THEN ${usedCol} - 1 ELSE 0 END
+        WHERE client_id = @client_id`
+    )
+}
+
+export async function checkAndIncrementLimit(type: 'image' | 'upload'): Promise<void> {
+  const limitCol = type === 'image' ? 'image_limit' : 'upload_limit'
+  const usedCol  = type === 'image' ? 'images_used' : 'uploads_used'
+  const clientId = getClientId()
+  const pool = await getPool()
+
+  // Read the configured limit from DB (written by syncImageLimitsFromEnv at startup).
+  const settingsRes = await pool.request()
+    .input('client_id', sql.Int, clientId)
+    .query(`SELECT ${limitCol} AS lim FROM dbo.ai_quota_settings WHERE client_id = @client_id`)
+
+  const lim: number | null = settingsRes.recordset[0]?.lim ?? null
+  if (lim === null || lim <= 0) return // NULL or 0 = unlimited
+
+  // Atomic check + increment. SQL Server evaluates the WHERE clause atomically,
+  // so two concurrent requests cannot both pass when only one slot remains.
+  const result = await pool.request()
+    .input('limit', sql.Int, lim)
+    .input('client_id', sql.Int, clientId)
+    .query(
+      `UPDATE dbo.ai_quota_settings
+          SET ${usedCol} = ${usedCol} + 1
+        WHERE client_id = @client_id AND ${usedCol} < @limit`
+    )
+
+  if (result.rowsAffected[0] === 0) throw new QuotaExceededError(type)
 }

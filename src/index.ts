@@ -39,6 +39,7 @@ import dashboardRoutes from './routes/dashboard'
 import reengagementRoutes from './routes/reengagement'
 import broadcastRoutes from './routes/broadcast'
 import { reengagementScheduler } from './services/reengagementScheduler'
+import { syncImageLimitsFromEnv } from './services/aiQuotaService'
 
 const app = express()
 
@@ -110,6 +111,9 @@ const server = app.listen(PORT)
 server.once('listening', () => {
   logger.info(`Backend running on http://localhost:${PORT}`)
   reengagementScheduler.start()
+  syncImageLimitsFromEnv().catch((err) =>
+    logger.warn({ err }, 'Could not sync image limits from env to DB — limits may not be enforced')
+  )
 })
 
 server.on('error', (err: NodeJS.ErrnoException) => {
