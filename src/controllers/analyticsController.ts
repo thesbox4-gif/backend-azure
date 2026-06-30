@@ -21,7 +21,7 @@ export async function getDashboardStats(req: AuthRequest, res: Response) {
        (SELECT COUNT(*) FROM dbo.variants WHERE quantity = 0) AS outOfStockVariants,
        (SELECT COUNT(*) FROM dbo.products WHERE published = 1) AS totalProducts,
        (SELECT COUNT(*) FROM dbo.profiles WHERE role = 'customer') AS totalCustomers,
-       (SELECT COUNT(*) FROM dbo.profiles WHERE role = 'employee') AS totalEmployees,
+       (SELECT COUNT(*) FROM dbo.profiles WHERE role = 'employee' AND employee_status IN ('pending','approved')) AS totalEmployees,
        (SELECT ISNULL(SUM(COALESCE(amount, unit_price * quantity)),0) FROM dbo.offline_sales) AS offlineRevenue,
        (SELECT ISNULL(SUM(COALESCE(amount, unit_price * quantity)),0) FROM dbo.offline_sales WHERE created_at >= @monthStart) AS offlineRevenueMonth`,
     params
