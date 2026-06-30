@@ -64,7 +64,14 @@ export async function getInventory(req: AuthRequest, res: Response) {
          FROM dbo.products p WHERE p.id = v.product_id FOR JSON PATH, INCLUDE_NULL_VALUES, WITHOUT_ARRAY_WRAPPER)) AS product
      FROM dbo.variants v ORDER BY v.sold_count DESC`
   )
-  let data = rows.map((v) => ({ ...v, product: v.product ? JSON.parse(v.product) : null }))
+  // Parse the product JSON per-row defensively: one malformed row must not
+  // throw and wipe the whole inventory list. Normalize quantity to a number so
+  // client-side stock filters (out_of_stock / low_stock) are reliable.
+  let data = rows.map((v) => {
+    let product = null
+    try { product = v.product ? JSON.parse(v.product) : null } catch { product = null }
+    return { ...v, product, quantity: Number(v.quantity ?? 0) }
+  })
 
   if (type) data = data.filter((v: any) => v.product?.type === type)
   if (category) data = data.filter((v: any) => v.product?.category?.id === category)
